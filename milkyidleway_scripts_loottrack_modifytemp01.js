@@ -1244,6 +1244,22 @@
            itemHrid.split('/').pop().replace(/_/g, ' '));
   }
 
+  // 在排序前添加物品价值获取逻辑
+  function getItemValue(itemHrid, count, marketDataAvailable) {
+    let itemValue = 0
+    // 处理金币特殊类型
+    if (itemHrid === '/items/coin'){
+      itemValue = count;
+    } else if (marketDataAvailable) {
+      const nameRaw = itemHrid.replace("/items/", "").replace(/_/g, " ");
+      const marketKey = nameRaw.split(" ").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+      if (marketData.market[marketKey]?.ask) {
+          itemValue = marketData.market[marketKey].ask;
+      }
+    }
+    return itemValue;
+}
+
   function updateLootDisplay(playerName) {
     document.querySelectorAll(`.persistent-gain[data-player="${playerName}"]`).forEach(el => el.remove());
 
@@ -1270,9 +1286,10 @@
     if (!previousLootCounts[playerName]) previousLootCounts[playerName] = {};
 
     const currentLoot = playerLootData[playerName];
-    const sorted = Object.entries(currentLoot).sort(
-      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0])
-    );
+
+    //const sorted = Object.entries(currentLoot).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    const sorted = Object.entries(currentLoot).sort((a, b) => {a[0].localeCompare(b[0]);});
+    //const sorted = Object.entries(currentLoot).map(([hrid, count]) => ({hrid, count, value: getItemValue(hrid, count, marketDataAvailable)})).sort((a, b) => b.value - a.value || a.hrid.localeCompare(b.hrid));
 
     let html = "";
     let totalRevenue = 0;
@@ -1285,9 +1302,9 @@
     Object.keys(playerLootData).forEach(playerName => {
       let totalRevenueEach = 0;
       const playerData = playerLootData[playerName];
-      const sorted = Object.entries(playerData).sort(
-          (a, b) => b[1] - a[1] || a[0].localeCompare(b[0])
-      );
+      //const sorted = Object.entries(playerData).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+      //const sorted = Object.entries(playerData).sort((a, b) => {a[0].localeCompare(b[0]);});
+      const sorted = Object.entries(playerData).sort((a, b) => getItemValue(b[0], b[1], marketDataAvailable) - getItemValue(a[0], a[1], marketDataAvailable) || a[0].localeCompare(b[0]));
 
       // 开始玩家列
       html += `<div class="player-column">`;
@@ -1300,20 +1317,12 @@
       } else {
           sorted.forEach(([itemHrid, count]) => {
               const prevDisplayCount = previousLootCounts[playerName][itemHrid] || 0;
-              const lastBattleStartCount =
-                    lastBattleLoot[playerName] && lastBattleLoot[playerName][itemHrid]
-              ? lastBattleLoot[playerName][itemHrid]
-              : prevDisplayCount;
+              const lastBattleStartCount = lastBattleLoot[playerName] && lastBattleLoot[playerName][itemHrid] ? lastBattleLoot[playerName][itemHrid] : prevDisplayCount;
               const gain = count - lastBattleStartCount;
               const flash = count > prevDisplayCount;
-
               const nameRaw = itemHrid.replace("/items/", "").replace(/_/g, " ");
               const name = translateItemHrid(itemHrid);
-
-              //const gainHTML =
-              //      gain > 0 ? `<span class="fadeGain">+${gain}</span>` : "";
-              const gainHTML = gain > 0 ?
-              `<span class="persistent-gain" data-item="${itemHrid}" data-player="${playerName}">+${gain}</span>` : "";
+              const gainHTML = gain > 0 ? `<span class="persistent-gain" data-item="${itemHrid}" data-player="${playerName}">+${gain}</span>` : "";
 
               let itemValue = 0;
               let priceFound = false;
@@ -1342,16 +1351,6 @@
                   <span class="item-count">× ${count}${gainHTML}</span>
                 </div>`;
 
-              /*
-              html += `<div class="${flash ? "flashLoot" : ""}">
-                • ${name} × ${count}${gainHTML} ${
-                  !priceFound && !itemHrid.endsWith("/coin")
-                  ? '<span style="color:gray;" title="Price data unavailable">?</span>'
-              : ""
-              }
-              </div>`;
-              */
-
               previousLootCounts[playerName][itemHrid] = count;
           });
       }
@@ -1372,44 +1371,11 @@
            ${!hasNonCoinItems ? '' : '<span class="market-note">(市场价)</span>'}
          </div>`;
 
-      /*
-      const hasNonCoinItems = sorted.some(([hrid]) => !hrid.endsWith("/coin"));
-      let finalRevenueText = "";
-      if (!marketDataAvailable && hasNonCoinItems && sorted.length > 0) {
-          finalRevenueText = `Total Value: Calculating...`;
-      } else if (sorted.length === 0) {
-          finalRevenueText = `Total Value: ${formatGold(0)}`;
-      } else {
-          finalRevenueText = `Total Value: ${formatGold(totalRevenue)}`;
-      }
-      try {
-          container.innerHTML = html;
-          if (revenueLine) {
-              revenueLine.textContent = finalRevenueText;
-          }
-      } catch (uiError) {
-          console.error(
-              `[LootTracker] CRITICAL: Error occurred during DOM update!`,
-              uiError
-          );
-      }
-      */
-
       html += `</div></div>`; // 关闭item-list和player-column
     });
 
     // 更新容器
     container.innerHTML = html;
-
-    /*
-    document.querySelectorAll(".fadeGain").forEach((el) => {
-      setTimeout(() => {
-        void el.offsetWidth;
-        el.style.opacity = "0";
-      }, 100);
-    });
-    */
-
     if (
       lastBattleLoot[playerName] &&
       Object.keys(lastBattleLoot[playerName]).length > 0
