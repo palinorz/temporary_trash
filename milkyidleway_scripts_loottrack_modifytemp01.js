@@ -1055,13 +1055,14 @@
 
         /* 调整图标尺寸 */
         .item-icon {
-          width: 12px;
-          height: 12px;
-          margin-right: 4px; /* 适当调整图标与文字的间距 */
+          width: 24px;
+          height: 24px;
+          margin-right: 1px; /* 适当调整图标与文字的间距 */
         }
 
         .item-count {
-          color: #4caf50;
+          /* color: #4caf50; */
+          color: #2196F3; /* 使用Material Design蓝色 */
           margin-left: 8px;
         }
 
@@ -1193,7 +1194,34 @@
       localStorage.setItem("lootOverlayLeft", panel.style.left);
     });
 
+    // 添加键盘事件监听
+    document.addEventListener("keydown", handleKeyPress);
+
     console.log("[LootTracker] Overlay created.");
+  }
+
+  // 新增键盘处理函数
+  function handleKeyPress(e) {
+    // 检查是否按的反引号键 (兼容不同浏览器)
+    if (e.key === "`" || e.key === "Backquote") {
+      e.preventDefault();
+      toggleMinimize();
+    }
+  }
+
+  // 封装最小化切换逻辑
+  function toggleMinimize() {
+    if (!document.getElementById("lootOverlay")) return;
+
+    isMinimized = !isMinimized;
+    const content = document.getElementById("lootContent");
+    const minBtn = document.getElementById("lootMinBtn");
+
+    // 执行原有切换逻辑
+    content.style.maxHeight = isMinimized ? "0" : "1000px";
+    content.style.opacity = isMinimized ? "0" : "1";
+    minBtn.textContent = isMinimized ? "+" : "−";
+    localStorage.setItem("lootOverlayMinimized", isMinimized);
   }
 
   // 翻译函数优化
@@ -1299,7 +1327,7 @@
               html += `
                 <div class="item-row">
                   <svg class="item-icon">
-                    <svg width="14px" height="14px">
+                    <svg width="16px" height="16px">
                     <use href="/static/media/items_sprite.6d12eb9d.svg#${itemHrid.replace("/items/", "")}"></use>
                   </svg>
                   <span class="item-name">${name}</span>
@@ -1436,13 +1464,19 @@
     const revenueLine = document.getElementById("lootRevenueLine");
 
     if (tabsContainer) tabsContainer.innerHTML = "";
-    if (totalsContainer)
-      totalsContainer.innerHTML = "<i>Loot data cleared.</i>";
+    if (totalsContainer) totalsContainer.innerHTML = "<i>Loot data cleared.</i>";
     if (revenueLine) revenueLine.textContent = "Total Value: N/A";
 
     activePlayer = null;
     selfTabSelected = false;
+
+    document.removeEventListener("keydown", handleKeyPress);
   }
+
+  // 在卸载脚本时移除监听
+  window.addEventListener("beforeunload", () => {
+    document.removeEventListener("keydown", handleKeyPress);
+  });
 
   (function injectWebSocketInterceptor() {
     const scriptId = "milkyway-websocket-interceptor";
