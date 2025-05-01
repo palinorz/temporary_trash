@@ -779,7 +779,7 @@
 
   function formatGold(value) {
     const numValue = Number(value) || 0;
-    return Math.round(numValue).toLocaleString() + " coin";
+    return Math.round(numValue).toLocaleString() + "";
   }
 
   function detectPlayerName() {
@@ -834,7 +834,6 @@
               <div id="lootTotals"></div>
           </div>
           <div id="lootBottomDragger">
-            <div id="lootRevenueLine">Total Value: Calculating...</div>
             <div class="drag-spacer"></div>
           </div>
         </div>
@@ -942,7 +941,7 @@
           overflow-x: auto;
           overflow-y: auto; /* 纵向滚动 */
           padding: 0 10px;
-          max-height: 100vh;
+          max-height: 160vh;
           max-width: calc(100vw - 60px); /* 根据视口动态计算 */
         }
 
@@ -1019,7 +1018,7 @@
 
         /* 调整总容器高度 */
         #lootTotals {
-          max-height: 60vh !important; /* 占据视口60%高度 */
+          max-height: 80vh !important; /* 占据视口60%高度 */
           overflow-y: auto;
         }
 
@@ -1065,6 +1064,14 @@
           color: #2196F3; /* 使用Material Design蓝色 */
           margin-left: 8px;
         }
+
+        .total-line {
+           text-align: center;
+           font-weight: bold;    /* 粗体 */
+           color: #FFD700;       /* 黄色十六进制代码 */
+           /* 或者使用颜色名称：color: gold; */
+         padding: 4px 0;
+         }
 
         .no-loot {
           color: #666;
@@ -1276,6 +1283,7 @@
 
     // 遍历所有玩家
     Object.keys(playerLootData).forEach(playerName => {
+      let totalRevenueEach = 0;
       const playerData = playerLootData[playerName];
       const sorted = Object.entries(playerData).sort(
           (a, b) => b[1] - a[1] || a[0].localeCompare(b[0])
@@ -1288,7 +1296,7 @@
 
       if (sorted.length === 0) {
           html += '<div class="no-loot">No loot tracked yet.</div>';
-          totalRevenue = 0;
+          totalRevenueEach = 0;
       } else {
           sorted.forEach(([itemHrid, count]) => {
               const prevDisplayCount = previousLootCounts[playerName][itemHrid] || 0;
@@ -1299,7 +1307,7 @@
               const gain = count - lastBattleStartCount;
               const flash = count > prevDisplayCount;
 
-              // const name = itemHrid.replace("/items/", "").replace(/_/g, " ");
+              const nameRaw = itemHrid.replace("/items/", "").replace(/_/g, " ");
               const name = translateItemHrid(itemHrid);
 
               //const gainHTML =
@@ -1313,7 +1321,7 @@
                   itemValue = count;
                   priceFound = true;
               } else if (marketDataAvailable) {
-                  const marketKey = name
+                  const marketKey = nameRaw
                   .split(" ")
                   .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
                   .join(" ");
@@ -1322,7 +1330,7 @@
                       priceFound = true;
                   }
               }
-              totalRevenue += itemValue;
+              totalRevenueEach += itemValue;
 
               html += `
                 <div class="item-row">
@@ -1333,6 +1341,7 @@
                   <span class="item-name">${name}</span>
                   <span class="item-count">× ${count}${gainHTML}</span>
                 </div>`;
+
               /*
               html += `<div class="${flash ? "flashLoot" : ""}">
                 • ${name} × ${count}${gainHTML} ${
@@ -1347,6 +1356,23 @@
           });
       }
 
+      const hasNonCoinItems = sorted.some(([hrid]) => !hrid.endsWith("/coin"));
+      let finalRevenueText = "";
+      if (!marketDataAvailable && hasNonCoinItems && sorted.length > 0) {
+         finalRevenueText = `总价值: 计算中...`;
+      } else if (sorted.length === 0) {
+        finalRevenueText = `总价值: ${formatGold(0)}`;
+      } else {
+        finalRevenueText = `总价值: ${formatGold(totalRevenueEach)}`;
+      }
+
+      html += `
+         <div class="total-line">
+           ${finalRevenueText}
+           ${!hasNonCoinItems ? '' : '<span class="market-note">(市场价)</span>'}
+         </div>`;
+
+      /*
       const hasNonCoinItems = sorted.some(([hrid]) => !hrid.endsWith("/coin"));
       let finalRevenueText = "";
       if (!marketDataAvailable && hasNonCoinItems && sorted.length > 0) {
@@ -1367,6 +1393,7 @@
               uiError
           );
       }
+      */
 
       html += `</div></div>`; // 关闭item-list和player-column
     });
