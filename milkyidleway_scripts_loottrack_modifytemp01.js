@@ -10,6 +10,20 @@
 // @updateURL https://update.greasyfork.cc/scripts/531302/Milkyway%20Idle%20-%20Current%20Loot%20Tracker.meta.js
 // ==/UserScript==
 
+//BigKitten改自Current Loot Tracker插件, 做了以下改变:
+//主要改变:
+//a1.原物品排序位按获取的数量排序; 改为按照物品价格排序, 金币固定位第一位, 物品价格需联网取自: https://raw.githubusercontent.com/holychikenz/MWIApi/main/medianmarket.json;
+//a2.原物品面板只显示1个人的物品, 按下顶部的1至3个人的姓名面板进行切换; 改为同时显示3个人的物品, 顶部姓名面板目前无用但不取消;
+//a3.增加快捷键反引号"`", 即数字键1左边的按键, 可以快捷开启和关闭面板;
+//a4.增加快捷键"\", 即回车键上方的按键, 可快速自动按下顶部所有角色的姓名, 效果会清理目前所有角色获取物品的+1+2+3等号;
+//a5.增加物品图标, 在原本的物品名称前增加图标;
+//a6.增加中文物品名, 物品的名称由英文改为中文;
+//次要改变:
+//b1.获取物品的+1+2+3+n符号取消闪烁效果, 从蓝色改为绿色;
+//b2.高于100k的物品使用橙色标记
+//尚未完成
+//c1.获取的每一行物品的价格需要跟在每一行物品数量的后方.
+
 (function () {
   "use strict";
 
@@ -24,6 +38,953 @@
     localStorage.getItem("lootListMinimized") === "true";
   let overlayReady = false;
   let marketData = {};
+
+  //定时器, 定期点击3个角色面板, 刷新所有的+号
+  //let autoSwitchTimeout = null;
+
+  // 在全局作用域添加颜色索引变量
+  let colorIndex = 0; // 新增
+
+  fetch(
+    "https://raw.githubusercontent.com/holychikenz/MWIApi/main/medianmarket.json"
+  )
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      return response.json();
+    })
+    .then((data) => {
+      marketData = data;
+      console.log("[LootTracker] Market data loaded successfully.");
+      if (activePlayer && document.getElementById("lootOverlay")) {
+        updateLootDisplay(activePlayer);
+      }
+    })
+    .catch((err) =>
+      console.error("[LootTracker] Failed to load market data:", err)
+    );
+
+  function formatGold(value) {
+    const numValue = Number(value) || 0;
+    return Math.round(numValue).toLocaleString() + "";
+  }
+
+  function detectPlayerName() {
+    const nameDiv =
+      document.querySelector(".CharacterStatus_playerName__XXXXX") ||
+      document.querySelector(".CharacterName_name__1amXp[data-name]");
+
+    if (nameDiv) {
+      myPlayerName = nameDiv.dataset.name || nameDiv.textContent.trim();
+      if (
+        overlayReady &&
+        myPlayerName &&
+        playerLootData[myPlayerName] &&
+        !selfTabSelected
+      ) {
+        selfTabSelected = true;
+        switchTab(myPlayerName);
+      }
+    } else {
+      setTimeout(detectPlayerName, 1000);
+    }
+  }
+
+  function createOverlay() {
+    if (overlayReady || document.getElementById("lootOverlay")) return;
+    overlayReady = true;
+
+    const panel = document.createElement("div");
+    panel.id = "lootOverlay";
+    panel.style.top = localStorage.getItem("lootOverlayTop") || "100px";
+    panel.style.left = localStorage.getItem("lootOverlayLeft") || "20px";
+
+    panel.innerHTML = `
+        <div id="lootHeader">
+          <span id="lootTitle">📦 Current Loot</span>
+          <div id="lootHeaderButtons">
+            <button id="lootExportBtn" class="loot-btn" data-tooltip="Export current player's loot as CSV">CSV</button>
+            <button id="lootClearBtn" class="loot-btn" data-tooltip="Close Plugin">×</button>
+            <button id="lootMinBtn" class="loot-btn" data-tooltip="Minimize/Restore Overlay">
+              ${isMinimized ? "+" : "−"}
+            </button>
+          </div>
+        </div>
+        <div id="lootContent">
+          <div id="lootTabs"></div>
+          <div id="lootToggleHeader">
+          </div>
+          <div id="columnsContainer">  <!-- 新增横向容器 -->
+              <div id="lootTotals"></div>
+          </div>
+          <div id="lootBottomDragger">
+            <div class="drag-spacer"></div>
+          </div>
+        </div>
+      `;
+
+    document.body.appendChild(panel);
+
+    const style = document.createElement("style");
+    style.textContent = `
+        #lootOverlay {
+          position: fixed;
+          width: auto;
+          min-width: 320px; /* 最小宽度保证基本可用性 */
+          max-width: 95vw;  /* 最大不超过视口宽度的95% */
+          /* right: 20px;      添加右侧定位 */
+          background: rgba(30, 30, 30, 0.95);
+          color: #fff;
+          font-family: monospace;
+          font-size: 13px;
+          border: 1px solid #555;
+          border-radius: 8px;
+          z-index: 99999;
+          user-select: none;
+          box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+        }
+        #lootHeader {
+          display: flex; justify-content: space-between; align-items: center;
+          padding: 6px 10px; background: rgba(20, 20, 20, 0.85);
+          border-bottom: 1px solid #333; border-radius: 8px 8px 0 0; cursor: move;
+        }
+        #lootTitle { font-weight: bold; }
+        #lootHeaderButtons { display: flex; gap: 4px; }
+        .loot-btn {
+          background: none; border: none; color: #aaa; cursor: pointer;
+          font-size: 14px; padding: 0 3px; position: relative;
+        }
+        .loot-btn:hover { color: #fff; }
+        .loot-btn:hover::after {
+          content: attr(data-tooltip); position: absolute; left: 50%; top: 110%;
+          transform: translateX(-50%); background: #222; color: #fff; padding: 4px 8px;
+          font-size: 11px; border-radius: 4px; white-space: nowrap; opacity: 0.95;
+          pointer-events: none; z-index: 100000;
+        }
+        #lootContent {
+          overflow: hidden; transition: max-height 0.3s ease-out, opacity 0.3s ease-out;
+          will-change: max-height, opacity;
+        }
+        #lootTabs {
+          display: flex; flex-wrap: wrap; padding: 5px 10px; gap: 6px;
+          border-bottom: 1px solid #333; background: rgba(24, 24, 24, 0.8); min-height: 26px;
+        }
+        #lootTabs button {
+          background: none; border: 1px solid #444; color: #aaa; padding: 2px 6px;
+          font-family: monospace; cursor: pointer; border-radius: 4px; font-size: 12px;
+          transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+        }
+        #lootTabs button:hover { background-color: #555; color: #fff; }
+        #lootTabs button.active {
+          background: #4caf50; color: #fff; border-color: #4caf50; font-weight: bold;
+        }
+        #lootToggleHeader {
+          padding: 6px 10px; cursor: pointer; font-weight: bold; border-bottom: 1px solid #333;
+          background: rgba(28, 28, 28, 0.8);
+        }
+        #lootToggleHeader:hover { background: rgba(40, 40, 40, 0.9); }
+        #lootToggleIcon { display: inline-block; transition: transform 0.2s ease-out; margin-left: 5px; }
+        #lootBottomDragger {
+          padding: 6px 10px; cursor: move; border-top: 1px solid #444;
+          background: rgba(20, 20, 20, 0.85); border-radius: 0 0 8px 8px;
+        }
+        #lootRevenueLine {
+          font-weight: bold; color: gold; cursor: inherit; padding-bottom: 4px;
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .drag-spacer { height: 8px; cursor: inherit; }
+        @keyframes lootFlashText { 0% { color: #b6ffb8; transform: scale(1.02); } 100% { color: white; transform: scale(1); } }
+        .flashLoot { animation: lootFlashText 1s ease-out; }
+
+        .fadeGain {
+          color: lime; font-weight: bold; font-size: 10px; vertical-align: super;
+          /* opacity: 1; transition: opacity 2s ease-out; */
+          margin-left: 3px; display: inline-block;
+        }
+
+        .persistent-gain {
+          color: #00ff00;
+          font-weight: bold;
+          animation: persistentPulse 10s infinite;
+        }
+
+        /* 横向布局容器 */
+        #columnsContainer {
+          overflow-x: auto;
+          overflow-y: auto; /* 纵向滚动 */
+          padding: 0 10px;
+          max-height: 160vh;
+          max-width: calc(100vw - 60px); /* 根据视口动态计算 */
+        }
+
+        #lootTotals {
+          overflow-y: visible; /* 取消纵向滚动 */
+          max-height: none !important; /* 移除高度限制 */
+          display: flex;
+          gap: 20px;
+          padding: 10px 5px;
+          min-width: fit-content; /* 确保宽度足够 */
+          flex-wrap: nowrap; /* 禁止换行 */
+        }
+
+        /* 单个玩家列 */
+        .player-column {
+          min-width: 220px;  /* 最小列宽 */
+          flex-shrink: 0;    /* 禁止列压缩 */
+          background: rgba(40,40,40,0.3);
+          border-radius: 6px;
+          padding: 8px;
+          border: 1px solid #444;
+          height: fit-content; /* 高度自适应 */
+        }
+
+        .player-header {
+          font-weight: bold;
+          color: #4caf50;
+          margin-bottom: 8px;
+          padding: 4px;
+          text-align: center;
+          position: sticky;
+          left: 0;
+        }
+
+        /* 物品列表 */
+        .item-list {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+
+        /* 响应式调整 */
+        @media (max-width: 600px) {
+          .player-column {
+            min-width: 180px;
+          }
+        }
+
+        /* 新增玩家区块样式 */
+        .player-section {
+          margin-bottom: 15px;
+          border-bottom: 1px solid #444;
+          padding-bottom: 10px;
+          background: rgba(40, 40, 40, 0.2);
+          border-radius: 4px;
+          padding: 8px;
+        }
+
+        .player-section:last-child {
+          margin-bottom: 0;
+          border-bottom: none;
+        }
+
+        .player-header {
+          font-weight: bold;
+          color: #4caf50;
+          margin: -4px 0 6px 0;
+          padding: 4px 8px;
+          background: rgba(76, 175, 80, 0.1);
+          border-radius: 4px;
+          display: inline-block;
+          border: 1px solid rgba(76, 175, 80, 0.3);
+        }
+
+        /* 调整总容器高度 */
+        #lootTotals {
+          max-height: 80vh !important; /* 占据视口60%高度 */
+          overflow-y: auto;
+        }
+
+        .item-name {
+          color: #eee;
+        }
+
+        .item-count {
+          color: #4caf50;
+          float: right;
+      }
+
+        /* 物品行细节 */
+        .item-row {
+          display: flex;
+          justify-content: space-between;
+          padding: 4px 8px;
+          background: rgba(50, 50, 50, 0.3);
+          border-radius: 4px;
+          transition: background 0.2s;
+        }
+
+        .item-row:hover {
+          background: rgba(80, 80, 80, 0.4);
+        }
+
+        .item-name {
+          color: #ddd;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        /* 调整图标尺寸 */
+        .item-icon {
+          width: 24px;
+          height: 24px;
+          margin-right: 1px; /* 适当调整图标与文字的间距 */
+        }
+
+        .item-count {
+          /* color: #4caf50; */
+          color: #2196F3; /* 使用Material Design蓝色 */
+          margin-left: 8px;
+        }
+
+        .total-line {
+           text-align: center;
+           font-weight: bold;    /* 粗体 */
+           color: #FFD700;       /* 黄色十六进制代码 */
+           /* 或者使用颜色名称：color: gold; */
+         padding: 4px 0;
+         }
+
+        .no-loot {
+          color: #666;
+          text-align: center;
+          padding: 8px;
+      }
+      `;
+    // 在样式标签添加标识（在创建style元素后添加）
+    style.setAttribute('data-mw-loot-tracker', 'true');
+
+    document.head.appendChild(style);
+
+    const content = document.getElementById("lootContent");
+    const lootTotals = document.getElementById("lootTotals");
+    content.style.maxHeight = isMinimized ? "0" : "1000px";
+    content.style.opacity = isMinimized ? "0" : "1";
+    lootTotals.style.maxHeight = isLootListMinimized ? "0" : "400px";
+    lootTotals.style.opacity = isLootListMinimized ? "0" : "1";
+    lootTotals.style.padding = isLootListMinimized ? "0 10px" : "10px";
+
+    document.getElementById("lootMinBtn").onclick = () => {
+      isMinimized = !isMinimized;
+      content.style.maxHeight = isMinimized ? "0" : "1000px";
+      content.style.opacity = isMinimized ? "0" : "1";
+      document.getElementById("lootMinBtn").textContent = isMinimized
+        ? "+"
+        : "−";
+      localStorage.setItem("lootOverlayMinimized", isMinimized);
+    };
+    document.getElementById("lootToggleHeader").onclick = () => {
+      isLootListMinimized = !isLootListMinimized;
+      lootTotals.style.maxHeight = isLootListMinimized ? "0" : "400px";
+      lootTotals.style.opacity = isLootListMinimized ? "0" : "1";
+      lootTotals.style.padding = isLootListMinimized ? "0 10px" : "10px";
+      //document.getElementById("lootToggleIcon").textContent = isLootListMinimized ? "▲" : "▼";
+      localStorage.setItem("lootListMinimized", isLootListMinimized);
+    };
+    const exportBtn = document.getElementById("lootExportBtn");
+    exportBtn.onclick = () => {
+      if (
+        !activePlayer ||
+        !playerLootData[activePlayer] ||
+        Object.keys(playerLootData[activePlayer]).length === 0
+      ) {
+        alert("No loot data available for the active player to export.");
+        return;
+      }
+      try {
+        const dataToExport = playerLootData[activePlayer];
+        const csvContent = Object.entries(dataToExport)
+          .map(([hrid, count]) => {
+            let itemName = hrid.replace("/items/", "").replace(/_/g, " ");
+            itemName = `"${itemName.replace(/"/g, '""')}"`;
+            return `${itemName},${count}`;
+          })
+          .join("\n");
+        const csvOutput = "Item Name,Count\n" + csvContent;
+        navigator.clipboard
+          .writeText(csvOutput)
+          .then(() => {
+            const originalText = exportBtn.textContent;
+            exportBtn.textContent = "Copied!";
+            exportBtn.style.color = "#4caf50";
+            setTimeout(() => {
+              exportBtn.textContent = originalText;
+              exportBtn.style.color = "";
+            }, 1500);
+          })
+          .catch((err) => {
+            console.error(
+              "[LootTracker] Failed to copy CSV to clipboard:",
+              err
+            );
+            alert("Failed to copy CSV. See console.");
+          });
+      } catch (error) {
+        console.error("[LootTracker] Error generating CSV:", error);
+        alert("Error generating CSV data.");
+      }
+    };
+
+    document.getElementById("lootClearBtn").onclick = () => {
+        // 移除覆盖层元素
+        const overlay = document.getElementById("lootOverlay");
+        if (overlay) overlay.remove();
+
+        // 移除添加的样式
+        const styles = document.querySelectorAll('style[data-mw-loot-tracker]');
+        styles.forEach(style => style.remove());
+
+        // 移除所有事件监听
+        document.removeEventListener("keydown", handleKeyPress);
+        //window.removeEventListener("LootTrackerBattle", battleHandler);
+        //window.removeEventListener("LootTrackerWSClosed", wsCloseHandler);
+        //window.removeEventListener("LootTrackerCombatReset", combatResetHandler);
+
+        // 清理全局状态
+        overlayReady = false;
+        playerLootData = {};
+        previousLootCounts = {};
+        lastBattleLoot = {};
+
+        console.log("[LootTracker] Plugin closed successfully.");
+    };
+
+    let dragging = false;
+    let offsetX = 0;
+    let offsetY = 0;
+    function beginDrag(e) {
+      if (e.target.closest("button")) return;
+      dragging = true;
+      panel.style.transition = "none";
+      offsetX = e.clientX - panel.offsetLeft;
+      offsetY = e.clientY - panel.offsetTop;
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = "move";
+    }
+    document
+      .getElementById("lootHeader")
+      .addEventListener("mousedown", beginDrag);
+    document
+      .getElementById("lootBottomDragger")
+      .addEventListener("mousedown", beginDrag);
+    document.addEventListener("mousemove", (e) => {
+      if (!dragging) return;
+      const newX = Math.max(
+        0,
+        Math.min(window.innerWidth - panel.offsetWidth, e.clientX - offsetX)
+      );
+      const newY = Math.max(
+        0,
+        Math.min(window.innerHeight - panel.offsetHeight, e.clientY - offsetY)
+      );
+      panel.style.left = `${newX}px`;
+      panel.style.top = `${newY}px`;
+    });
+    document.addEventListener("mouseup", () => {
+      if (!dragging) return;
+      dragging = false;
+      panel.style.transition = "";
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+      localStorage.setItem("lootOverlayTop", panel.style.top);
+      localStorage.setItem("lootOverlayLeft", panel.style.left);
+    });
+
+    // 添加键盘事件监听
+    document.addEventListener("keydown", handleKeyPress);
+
+    console.log("[LootTracker] Overlay created.");
+  }
+
+  // 新增键盘处理函数
+  function handleKeyPress(e) {
+    // 检查是否按的反引号键 (兼容不同浏览器)
+    if (e.key === "`" || e.key === "Backquote") {
+      e.preventDefault();
+      toggleMinimize();
+    }
+
+      // 新增反斜杠键处理（\键）
+      if (e.key === '\\') {
+          e.preventDefault();
+          triggerTabSwitch();
+      }
+  }
+
+    // 触发函数
+    function triggerTabSwitch() {
+        colorIndex = (colorIndex + 1) % 3; // 颜色索引循环
+        const tabs = document.querySelectorAll('#lootTabs button');
+        if (tabs.length >= 3) {
+            tabs[0].click();
+            setTimeout(() => tabs[1].click(), 100);
+            setTimeout(() => tabs[2].click(), 200);
+        }
+    }
+
+  // 封装最小化切换逻辑
+  function toggleMinimize() {
+    if (!document.getElementById("lootOverlay")) return;
+
+    isMinimized = !isMinimized;
+    const content = document.getElementById("lootContent");
+    const minBtn = document.getElementById("lootMinBtn");
+
+    // 执行原有切换逻辑
+    content.style.maxHeight = isMinimized ? "0" : "1000px";
+    content.style.opacity = isMinimized ? "0" : "1";
+    minBtn.textContent = isMinimized ? "+" : "−";
+    localStorage.setItem("lootOverlayMinimized", isMinimized);
+  }
+
+  // 翻译函数优化
+  function translateItemHrid(itemHrid) {
+    // 直接匹配完整hrid路径
+    const chinese = itemNames[itemHrid];
+    // 处理特殊情况：带复数形式的物品
+    const baseHrid = itemHrid.replace(/s$/, '');
+    const baseChinese = itemNames[baseHrid];
+    // 组合最终显示名称
+    return chinese ||
+           (baseChinese ? `${baseChinese}(复数)` :
+           itemHrid.split('/').pop().replace(/_/g, ' '));
+  }
+
+  // 在排序前添加物品价值获取逻辑
+  function getItemValue(itemHrid, count, marketDataAvailable) {
+    let itemValue = 0
+    // 处理金币特殊类型
+    if (itemHrid === '/items/coin'){
+      itemValue = count;
+    } else if (marketDataAvailable) {
+      const nameRaw = itemHrid.replace("/items/", "").replace(/_/g, " ");
+      const marketKey = nameRaw.split(" ").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+      if (marketData.market[marketKey]?.ask) {
+          itemValue = marketData.market[marketKey].ask;
+      }
+    }
+    return itemValue;
+}
+
+  function updateLootDisplay(playerName) {
+    document.querySelectorAll(`.persistent-gain[data-player="${playerName}"]`).forEach(el => el.remove());
+
+    const colors = ['#00ff00', '#ffff00', '#ff0000']; // 绿/黄/红
+    const container = document.getElementById("lootTotals");
+    const revenueLine = document.getElementById("lootRevenueLine");
+
+    if (!container) {
+      console.error(
+        "[LootTracker] updateLootDisplay: Could not find #lootTotals element!"
+      );
+      if (revenueLine) revenueLine.textContent = "Total Value: Error (UI)";
+      return;
+    }
+    if (!revenueLine) {
+      console.warn(
+        "[LootTracker] updateLootDisplay: Could not find #lootRevenueLine element."
+      );
+    }
+    if (!playerLootData[playerName]) {
+      container.innerHTML = "<i>Waiting for player data...</i>";
+      if (revenueLine) revenueLine.textContent = "Total Value: N/A";
+      return;
+    }
+    if (!previousLootCounts[playerName]) previousLootCounts[playerName] = {};
+
+    const currentLoot = playerLootData[playerName];
+
+    //const sorted = Object.entries(currentLoot).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    const sorted = Object.entries(currentLoot).sort((a, b) => {a[0].localeCompare(b[0]);});
+    //const sorted = Object.entries(currentLoot).map(([hrid, count]) => ({hrid, count, value: getItemValue(hrid, count, marketDataAvailable)})).sort((a, b) => b.value - a.value || a.hrid.localeCompare(b.hrid));
+
+    let html = "";
+    let totalRevenue = 0;
+    let marketDataAvailable =
+      marketData &&
+      marketData.market &&
+      Object.keys(marketData.market).length > 0;
+
+    // 遍历所有玩家
+    Object.keys(playerLootData).forEach(playerName => {
+      let totalRevenueEach = 0;
+      const playerData = playerLootData[playerName];
+      // const sorted = Object.entries(playerData).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+      // const sorted = Object.entries(playerData).sort((a, b) => {a[0].localeCompare(b[0]);});
+      // const sorted = Object.entries(playerData).sort((a, b) => getItemValue(b[0], b[1], marketDataAvailable) - getItemValue(a[0], a[1], marketDataAvailable) || a[0].localeCompare(b[0]));
+      const sorted = Object.entries(playerData).sort((a, b) => {
+          // 强制金币排在第一位
+          const aIsCoin = a[0] === '/items/coin';
+          const bIsCoin = b[0] === '/items/coin';
+          if (aIsCoin && !bIsCoin) return -1;
+          if (!aIsCoin && bIsCoin) return 1;
+          // 非金币物品按原有逻辑排序
+          return getItemValue(b[0], b[1], marketDataAvailable) - getItemValue(a[0], a[1], marketDataAvailable) || a[0].localeCompare(b[0]);
+      });
+
+      // 开始玩家列
+      html += `<div class="player-column">`;
+      html += `<div class="item-list">`;
+      //html += `<div class="player-header">${playerName}</div>`;
+
+      if (sorted.length === 0) {
+          html += '<div class="no-loot">No loot tracked yet.</div>';
+          totalRevenueEach = 0;
+      } else {
+          sorted.forEach(([itemHrid, count]) => {
+              const prevDisplayCount = previousLootCounts[playerName][itemHrid] || 0;
+              const lastBattleStartCount = lastBattleLoot[playerName] && lastBattleLoot[playerName][itemHrid] ? lastBattleLoot[playerName][itemHrid] : prevDisplayCount;
+              const gain = count - lastBattleStartCount;
+              const flash = count > prevDisplayCount;
+              const nameRaw = itemHrid.replace("/items/", "").replace(/_/g, " ");
+              const name = translateItemHrid(itemHrid);
+              const gainHTML = gain > 0 ? `<span class="persistent-gain" data-item="${itemHrid}" data-player="${playerName}">+${gain}</span>` : "";
+
+              //const currentColor = colors[colorIndex % 3];
+              //const gainHTML = gain > 0 ? `<span class="persistent-gain" style="color: ${currentColor}" data-item="${itemHrid}" data-player="${playerName}">+${gain}</span>` : "";
+
+              let itemValue = 0;
+              let priceFound = false;
+              let isHighValue = false; //价值判断
+              let singleItemValue = -1;
+              if (itemHrid.endsWith("/coin")) {
+                  itemValue = count;
+                  priceFound = true;
+              } else if (marketDataAvailable) {
+                  const marketKey = nameRaw
+                  .split(" ")
+                  .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+                  .join(" ");
+                  if (marketData.market[marketKey]?.ask) {
+                      singleItemValue = marketData.market[marketKey].ask;
+                      isHighValue = singleItemValue > 100000; //价值判断
+                      itemValue = count * singleItemValue;
+                      priceFound = true;
+                  }
+              }
+              totalRevenueEach += itemValue;
+
+              //价值判断决定颜色
+              const nameColor = isHighValue ? "#FFA500" : "#ddd"; //颜色切换
+              //"red"       // 红色 (#FF0000)
+              //"blue"      // 蓝色 (#0000FF)
+              //"green"     // 绿色 (#008000)
+              //"orange"    // 橙色 (#FFA500)
+              //"purple"    // 标准紫色 (#800080)
+              //"cyan"      // 青色 (#00FFFF)
+              //"teal"      // 蓝绿色 (#008080)
+              //"gold"      // 金色 (#FFD700)
+
+              if (itemHrid.endsWith("/coin")) {
+                  html += `
+                    <div class="item-row">
+                      <svg class="item-icon">
+                        <svg width="15px" height="15px">
+                        <use href="/static/media/items_sprite.6d12eb9d.svg#${itemHrid.replace("/items/", "")}"></use>
+                      </svg>
+                      <span class="item-name" style="color: ${nameColor}">${name}</span></span>
+                      <span class="item-count">× ${count}${gainHTML}</span>
+                    </div>`;
+              }else if (singleItemValue >= 100000){
+                  html += `
+                    <div class="item-row">
+                      <svg class="item-icon">
+                        <svg width="15px" height="15px">
+                        <use href="/static/media/items_sprite.6d12eb9d.svg#${itemHrid.replace("/items/", "")}"></use>
+                      </svg>
+                      <span class="item-name" style="color: ${nameColor}">${name} (${Math.floor(itemValue / 1000)}k)</span></span>
+                      <span class="item-count">× ${count}${gainHTML}</span>
+                    </div>`;
+
+              }else {
+                  html += `
+                    <div class="item-row">
+                      <svg class="item-icon">
+                        <svg width="15px" height="15px">
+                        <use href="/static/media/items_sprite.6d12eb9d.svg#${itemHrid.replace("/items/", "")}"></use>
+                      </svg>
+                      <span class="item-name" style="color: ${nameColor}">${name}</span></span>
+                      <span class="item-count">× ${count}${gainHTML}</span>
+                    </div>`;
+              }
+
+              /*
+              html += `
+                <div class="item-row">
+                  <svg class="item-icon">
+                    <svg width="16px" height="16px">
+                    <use href="/static/media/items_sprite.6d12eb9d.svg#${itemHrid.replace("/items/", "")}"></use>
+                  </svg>
+                  <span class="item-name">${name}</span>
+                  <span class="item-count">× ${count}${gainHTML}</span>
+                </div>`;
+              */
+
+              previousLootCounts[playerName][itemHrid] = count;
+          });
+      }
+
+      const hasNonCoinItems = sorted.some(([hrid]) => !hrid.endsWith("/coin"));
+      let finalRevenueText = "";
+      if (!marketDataAvailable && hasNonCoinItems && sorted.length > 0) {
+         finalRevenueText = `未取到Github市价数据`;
+      } else if (sorted.length === 0) {
+        finalRevenueText = `总价值: ${formatGold(0)}`;
+      } else {
+        finalRevenueText = `总价值: ${formatGold(totalRevenueEach)}`;
+      }
+
+      html += `
+         <div class="total-line">
+           ${finalRevenueText}
+           ${!hasNonCoinItems ? '' : '<span class="market-note">(市场价)</span>'}
+         </div>`;
+
+      html += `</div></div>`; // 关闭item-list和player-column
+    });
+
+    // 更新容器
+    container.innerHTML = html;
+    if (
+      lastBattleLoot[playerName] &&
+      Object.keys(lastBattleLoot[playerName]).length > 0
+    ) {
+      lastBattleLoot[playerName] = {};
+    }
+  }
+
+  function switchTab(playerName) {
+    activePlayer = playerName;
+    updateLootDisplay(playerName); // 强制刷新显示
+    document.querySelectorAll("#lootTabs button").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.name === playerName);
+    });
+  }
+
+  function addTab(player) {
+    const playerName = player.name;
+    const lootMap = player.totalLootMap || {};
+    const container = document.getElementById("lootTabs");
+    if (!container) {
+      console.error("[LootTracker] Loot tabs container not found!");
+      return;
+    }
+    if (!playerLootData[playerName]) playerLootData[playerName] = {};
+    if (!previousLootCounts[playerName]) previousLootCounts[playerName] = {};
+    if (!lastBattleLoot[playerName]) lastBattleLoot[playerName] = {};
+
+    let tabNeedsUpdate = false;
+    for (const key in lootMap) {
+      const { itemHrid, count } = lootMap[key];
+      if (playerLootData[playerName][itemHrid] !== count) {
+        lastBattleLoot[playerName][itemHrid] =
+          playerLootData[playerName][itemHrid] || 0;
+        playerLootData[playerName][itemHrid] = count;
+        tabNeedsUpdate = true;
+      }
+    }
+
+    let tabButton = container.querySelector(
+      `button[data-name="${playerName}"]`
+    );
+    if (!tabButton) {
+      tabButton = document.createElement("button");
+      tabButton.textContent = playerName;
+      tabButton.dataset.name = playerName;
+      tabButton.onclick = () => switchTab(playerName);
+      container.appendChild(tabButton);
+
+      if (!activePlayer) activePlayer = playerName;
+    }
+
+    if (playerName === myPlayerName && !selfTabSelected) {
+      triggerTabSwitch; //触发标签切换
+      selfTabSelected = true;
+      switchTab(playerName); // 触发UI更新
+      tabNeedsUpdate = false;
+    } else if (playerName === activePlayer && tabNeedsUpdate) {
+      updateLootDisplay(playerName);
+    }
+    if (playerName === activePlayer) {
+      document.querySelectorAll("#lootTabs button").forEach((btn) => {btn.classList.toggle("active", btn.dataset.name === activePlayer);});
+    }
+  }
+
+  function clearAllLootData() {
+    console.log("[LootTracker] Clearing all loot data.");
+
+    for (const p in playerLootData) {
+      playerLootData[p] = {};
+      previousLootCounts[p] = {};
+      lastBattleLoot[p] = {};
+    }
+
+    const tabsContainer = document.getElementById("lootTabs");
+    const totalsContainer = document.getElementById("lootTotals");
+    const revenueLine = document.getElementById("lootRevenueLine");
+
+    if (tabsContainer) tabsContainer.innerHTML = "";
+    if (totalsContainer) totalsContainer.innerHTML = "<i>Loot data cleared.</i>";
+    if (revenueLine) revenueLine.textContent = "Total Value: N/A";
+
+    activePlayer = null;
+    selfTabSelected = false;
+
+    document.removeEventListener("keydown", handleKeyPress);
+  }
+
+  // 在卸载脚本时移除监听
+  window.addEventListener("beforeunload", () => {
+    document.removeEventListener("keydown", handleKeyPress);
+  });
+
+  (function injectWebSocketInterceptor() {
+    const scriptId = "milkyway-websocket-interceptor";
+
+    if (document.getElementById(scriptId)) return;
+
+    const s = document.createElement("script");
+    s.id = scriptId;
+    s.textContent = `
+          (function() {
+
+            if (window.originalWebSocket) { return; }
+            window.originalWebSocket = window.WebSocket;
+
+
+            window.WebSocket = new Proxy(window.originalWebSocket, {
+              construct(target, args) {
+
+                const wsInstance = new target(...args);
+                try {
+                    const url = args[0];
+
+                    if (typeof url === 'string' && (url.includes("api.milkywayidle.com/ws") || url.includes("api-test.milkywayidle.com/ws"))) {
+
+
+                        wsInstance.addEventListener("message", (event) => {
+                          try {
+                            const data = JSON.parse(event.data);
+
+                            if (data.type === "new_battle" && data.players) {
+
+                              window.dispatchEvent(new CustomEvent("LootTrackerBattle", { detail: data }));
+                            }
+
+                            else if ( data.type === "new_character_action" && data.newCharacterActionData?.shouldClearQueue && data.newCharacterActionData.actionHrid?.startsWith("/actions/combat/") ) {
+
+                              window.dispatchEvent(new CustomEvent("LootTrackerCombatReset"));
+                            }
+                          } catch (parseOrDispatchError) {
+                              console.error('[LootTracker WS Interceptor] Error processing message:', parseOrDispatchError, 'Raw Data:', event.data);
+                          }
+                        });
+
+
+                        wsInstance.addEventListener("open", () => {
+
+                        });
+
+
+                        wsInstance.addEventListener("close", (event) => {
+
+                            console.log(\`[LootTracker WS Interceptor] Target WebSocket connection closed. Code: \${event.code}, Reason: \${event.reason}. Dispatching LootTrackerWSClosed event.\`);
+
+                            window.dispatchEvent(new CustomEvent("LootTrackerWSClosed", {
+                                detail: { code: event.code, reason: event.reason }
+                            }));
+                        });
+
+
+                        wsInstance.addEventListener("error", (event) => {
+                            console.error('[LootTracker WS Interceptor] Target WebSocket error:', event);
+                        });
+
+                    }
+                } catch (proxyConstructError) {
+                    console.error('[LootTracker WS Interceptor] Error setting up WebSocket proxy:', proxyConstructError);
+                }
+
+                return wsInstance;
+              }
+            });
+
+            console.log('[LootTracker WS Interceptor] WebSocket Proxy installed.');
+          })();
+        `;
+
+    (document.head || document.documentElement).appendChild(s);
+  })();
+
+  window.addEventListener("LootTrackerBattle", (e) => {
+    if (!overlayReady) {
+      console.warn(
+        "[LootTracker] Overlay not ready when battle event received, skipping update."
+      );
+      return;
+    }
+    const data = e.detail;
+
+    if (data && data.players && Array.isArray(data.players)) {
+      data.players.forEach((player) => {
+        if (player && player.name) {
+          addTab(player);
+        } else {
+          console.warn(
+            "[LootTracker] Player data missing name in battle event:",
+            player
+          );
+        }
+      });
+    } else {
+      console.warn(
+        "[LootTracker] Invalid data received in LootTrackerBattle event:",
+        data
+      );
+    }
+  });
+
+  window.addEventListener("LootTrackerWSClosed", (e) => {
+    console.log(
+      `[LootTracker] Detected WebSocket closure (Code: ${e.detail?.code}, Reason: ${e.detail?.reason}). Clearing all loot data and resetting player name.`
+    );
+
+    myPlayerName = null;
+
+    activePlayer = null;
+    selfTabSelected = false;
+
+    if (overlayReady) {
+      clearAllLootData();
+    } else {
+      console.warn(
+        "[LootTracker] WebSocket closed, but overlay not ready. Data should be clear on next init."
+      );
+    }
+  });
+
+  window.addEventListener("LootTrackerCombatReset", (e) => {
+    if (!overlayReady) {
+      console.warn(
+        "[LootTracker] Overlay not ready when reset event received, skipping clear."
+      );
+      return;
+    }
+    console.log("[LootTracker] Calling clearAllLootData due to combat reset.");
+    clearAllLootData();
+  });
+
+  function initialize() {
+    console.log("[LootTracker] Initializing...");
+    createOverlay();
+    detectPlayerName();
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initialize);
+  } else {
+    initialize();
+  }
 
   // 中英物品名称对照字典（示例部分）
   const itemNames = {
@@ -756,865 +1717,4 @@
   "/items/shard_of_protection": "\u4fdd\u62a4\u788e\u7247",
   "/items/mirror_of_protection": "\u4fdd\u62a4\u4e4b\u955c"
   };
-
-  fetch(
-    "https://raw.githubusercontent.com/holychikenz/MWIApi/main/medianmarket.json"
-  )
-    .then((response) => {
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      return response.json();
-    })
-    .then((data) => {
-      marketData = data;
-      console.log("[LootTracker] Market data loaded successfully.");
-      if (activePlayer && document.getElementById("lootOverlay")) {
-        updateLootDisplay(activePlayer);
-      }
-    })
-    .catch((err) =>
-      console.error("[LootTracker] Failed to load market data:", err)
-    );
-
-  function formatGold(value) {
-    const numValue = Number(value) || 0;
-    return Math.round(numValue).toLocaleString() + "";
-  }
-
-  function detectPlayerName() {
-    const nameDiv =
-      document.querySelector(".CharacterStatus_playerName__XXXXX") ||
-      document.querySelector(".CharacterName_name__1amXp[data-name]");
-
-    if (nameDiv) {
-      myPlayerName = nameDiv.dataset.name || nameDiv.textContent.trim();
-      if (
-        overlayReady &&
-        myPlayerName &&
-        playerLootData[myPlayerName] &&
-        !selfTabSelected
-      ) {
-        selfTabSelected = true;
-        switchTab(myPlayerName);
-      }
-    } else {
-      setTimeout(detectPlayerName, 1000);
-    }
-  }
-
-  function createOverlay() {
-    if (overlayReady || document.getElementById("lootOverlay")) return;
-    overlayReady = true;
-
-    const panel = document.createElement("div");
-    panel.id = "lootOverlay";
-    panel.style.top = localStorage.getItem("lootOverlayTop") || "100px";
-    panel.style.left = localStorage.getItem("lootOverlayLeft") || "20px";
-
-    panel.innerHTML = `
-        <div id="lootHeader">
-          <span id="lootTitle">📦 Current Loot</span>
-          <div id="lootHeaderButtons">
-            <button id="lootExportBtn" class="loot-btn" data-tooltip="Export current player's loot as CSV">CSV</button>
-            <button id="lootClearBtn" class="loot-btn" data-tooltip="Clear ALL tracked loot">⟳</button>
-            <button id="lootMinBtn" class="loot-btn" data-tooltip="Minimize/Restore Overlay">
-              ${isMinimized ? "+" : "−"}
-            </button>
-          </div>
-        </div>
-        <div id="lootContent">
-          <div id="lootTabs"></div>
-          <div id="lootToggleHeader">
-              Loot <span id="lootToggleIcon">${
-                isLootListMinimized ? "▲" : "▼"
-              }</span>
-          </div>
-          <div id="columnsContainer">  <!-- 新增横向容器 -->
-              <div id="lootTotals"></div>
-          </div>
-          <div id="lootBottomDragger">
-            <div class="drag-spacer"></div>
-          </div>
-        </div>
-      `;
-
-    document.body.appendChild(panel);
-
-    const style = document.createElement("style");
-    style.textContent = `
-        #lootOverlay {
-          position: fixed;
-          width: auto;
-          min-width: 320px; /* 最小宽度保证基本可用性 */
-          max-width: 95vw;  /* 最大不超过视口宽度的95% */
-          /* right: 20px;      添加右侧定位 */
-          background: rgba(30, 30, 30, 0.95);
-          color: #fff;
-          font-family: monospace;
-          font-size: 13px;
-          border: 1px solid #555;
-          border-radius: 8px;
-          z-index: 99999;
-          user-select: none;
-          box-shadow: 0 4px 10px rgba(0,0,0,0.4);
-        }
-        #lootHeader {
-          display: flex; justify-content: space-between; align-items: center;
-          padding: 6px 10px; background: rgba(20, 20, 20, 0.85);
-          border-bottom: 1px solid #333; border-radius: 8px 8px 0 0; cursor: move;
-        }
-        #lootTitle { font-weight: bold; }
-        #lootHeaderButtons { display: flex; gap: 4px; }
-        .loot-btn {
-          background: none; border: none; color: #aaa; cursor: pointer;
-          font-size: 14px; padding: 0 3px; position: relative;
-        }
-        .loot-btn:hover { color: #fff; }
-        .loot-btn:hover::after {
-          content: attr(data-tooltip); position: absolute; left: 50%; top: 110%;
-          transform: translateX(-50%); background: #222; color: #fff; padding: 4px 8px;
-          font-size: 11px; border-radius: 4px; white-space: nowrap; opacity: 0.95;
-          pointer-events: none; z-index: 100000;
-        }
-        #lootContent {
-          overflow: hidden; transition: max-height 0.3s ease-out, opacity 0.3s ease-out;
-          will-change: max-height, opacity;
-        }
-        #lootTabs {
-          display: flex; flex-wrap: wrap; padding: 5px 10px; gap: 6px;
-          border-bottom: 1px solid #333; background: rgba(24, 24, 24, 0.8); min-height: 26px;
-        }
-        #lootTabs button {
-          background: none; border: 1px solid #444; color: #aaa; padding: 2px 6px;
-          font-family: monospace; cursor: pointer; border-radius: 4px; font-size: 12px;
-          transition: background-color 0.2s, color 0.2s, border-color 0.2s;
-        }
-        #lootTabs button:hover { background-color: #555; color: #fff; }
-        #lootTabs button.active {
-          background: #4caf50; color: #fff; border-color: #4caf50; font-weight: bold;
-        }
-        #lootToggleHeader {
-          padding: 6px 10px; cursor: pointer; font-weight: bold; border-bottom: 1px solid #333;
-          background: rgba(28, 28, 28, 0.8);
-        }
-        #lootToggleHeader:hover { background: rgba(40, 40, 40, 0.9); }
-        #lootToggleIcon { display: inline-block; transition: transform 0.2s ease-out; margin-left: 5px; }
-        #lootBottomDragger {
-          padding: 6px 10px; cursor: move; border-top: 1px solid #444;
-          background: rgba(20, 20, 20, 0.85); border-radius: 0 0 8px 8px;
-        }
-        #lootRevenueLine {
-          font-weight: bold; color: gold; cursor: inherit; padding-bottom: 4px;
-          white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        }
-        .drag-spacer { height: 8px; cursor: inherit; }
-        @keyframes lootFlashText { 0% { color: #b6ffb8; transform: scale(1.02); } 100% { color: white; transform: scale(1); } }
-        .flashLoot { animation: lootFlashText 1s ease-out; }
-
-        .fadeGain {
-          color: lime; font-weight: bold; font-size: 10px; vertical-align: super;
-          /* opacity: 1; transition: opacity 2s ease-out; */
-          margin-left: 3px; display: inline-block;
-        }
-
-        /* 新增持久化样式 */
-        /* 带动画闪烁.persistent-gain {
-          color: #00ff00;
-          animation: persistentPulse 2s infinite;
-        }
-        */
-        .persistent-gain {
-          color: #00ff00;
-          opacity: 0.9;
-          text-shadow: 0 0 3px rgba(0,255,0,0.3);
-        }
-
-        @keyframes persistentPulse {
-          0% { opacity: 1; }
-          50% { opacity: 0.6; }
-          100% { opacity: 1; }
-        }
-
-        /* 横向布局容器 */
-        #columnsContainer {
-          overflow-x: auto;
-          overflow-y: auto; /* 纵向滚动 */
-          padding: 0 10px;
-          max-height: 160vh;
-          max-width: calc(100vw - 60px); /* 根据视口动态计算 */
-        }
-
-        #lootTotals {
-          overflow-y: visible; /* 取消纵向滚动 */
-          max-height: none !important; /* 移除高度限制 */
-          display: flex;
-          gap: 20px;
-          padding: 10px 5px;
-          min-width: fit-content; /* 确保宽度足够 */
-          flex-wrap: nowrap; /* 禁止换行 */
-        }
-
-        /* 单个玩家列 */
-        .player-column {
-          min-width: 220px;  /* 最小列宽 */
-          flex-shrink: 0;    /* 禁止列压缩 */
-          background: rgba(40,40,40,0.3);
-          border-radius: 6px;
-          padding: 8px;
-          border: 1px solid #444;
-          height: fit-content; /* 高度自适应 */
-        }
-
-        .player-header {
-          font-weight: bold;
-          color: #4caf50;
-          margin-bottom: 8px;
-          padding: 4px;
-          text-align: center;
-          position: sticky;
-          left: 0;
-        }
-
-        /* 物品列表 */
-        .item-list {
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
-        }
-
-        /* 响应式调整 */
-        @media (max-width: 600px) {
-          .player-column {
-            min-width: 180px;
-          }
-        }
-
-        /* 新增玩家区块样式 */
-        .player-section {
-          margin-bottom: 15px;
-          border-bottom: 1px solid #444;
-          padding-bottom: 10px;
-          background: rgba(40, 40, 40, 0.2);
-          border-radius: 4px;
-          padding: 8px;
-        }
-
-        .player-section:last-child {
-          margin-bottom: 0;
-          border-bottom: none;
-        }
-
-        .player-header {
-          font-weight: bold;
-          color: #4caf50;
-          margin: -4px 0 6px 0;
-          padding: 4px 8px;
-          background: rgba(76, 175, 80, 0.1);
-          border-radius: 4px;
-          display: inline-block;
-          border: 1px solid rgba(76, 175, 80, 0.3);
-        }
-
-        /* 调整总容器高度 */
-        #lootTotals {
-          max-height: 80vh !important; /* 占据视口60%高度 */
-          overflow-y: auto;
-        }
-
-        .item-name {
-          color: #eee;
-        }
-
-        .item-count {
-          color: #4caf50;
-          float: right;
-      }
-
-        /* 物品行细节 */
-        .item-row {
-          display: flex;
-          justify-content: space-between;
-          padding: 4px 8px;
-          background: rgba(50, 50, 50, 0.3);
-          border-radius: 4px;
-          transition: background 0.2s;
-        }
-
-        .item-row:hover {
-          background: rgba(80, 80, 80, 0.4);
-        }
-
-        .item-name {
-          color: #ddd;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        /* 调整图标尺寸 */
-        .item-icon {
-          width: 24px;
-          height: 24px;
-          margin-right: 1px; /* 适当调整图标与文字的间距 */
-        }
-
-        .item-count {
-          /* color: #4caf50; */
-          color: #2196F3; /* 使用Material Design蓝色 */
-          margin-left: 8px;
-        }
-
-        .total-line {
-           text-align: center;
-           font-weight: bold;    /* 粗体 */
-           color: #FFD700;       /* 黄色十六进制代码 */
-           /* 或者使用颜色名称：color: gold; */
-         padding: 4px 0;
-         }
-
-        .no-loot {
-          color: #666;
-          text-align: center;
-          padding: 8px;
-      }
-      `;
-    document.head.appendChild(style);
-
-    const content = document.getElementById("lootContent");
-    const lootTotals = document.getElementById("lootTotals");
-    content.style.maxHeight = isMinimized ? "0" : "1000px";
-    content.style.opacity = isMinimized ? "0" : "1";
-    lootTotals.style.maxHeight = isLootListMinimized ? "0" : "400px";
-    lootTotals.style.opacity = isLootListMinimized ? "0" : "1";
-    lootTotals.style.padding = isLootListMinimized ? "0 10px" : "10px";
-
-    document.getElementById("lootMinBtn").onclick = () => {
-      isMinimized = !isMinimized;
-      content.style.maxHeight = isMinimized ? "0" : "1000px";
-      content.style.opacity = isMinimized ? "0" : "1";
-      document.getElementById("lootMinBtn").textContent = isMinimized
-        ? "+"
-        : "−";
-      localStorage.setItem("lootOverlayMinimized", isMinimized);
-    };
-    document.getElementById("lootToggleHeader").onclick = () => {
-      isLootListMinimized = !isLootListMinimized;
-      lootTotals.style.maxHeight = isLootListMinimized ? "0" : "400px";
-      lootTotals.style.opacity = isLootListMinimized ? "0" : "1";
-      lootTotals.style.padding = isLootListMinimized ? "0 10px" : "10px";
-      document.getElementById("lootToggleIcon").textContent =
-        isLootListMinimized ? "▲" : "▼";
-      localStorage.setItem("lootListMinimized", isLootListMinimized);
-    };
-    const exportBtn = document.getElementById("lootExportBtn");
-    exportBtn.onclick = () => {
-      if (
-        !activePlayer ||
-        !playerLootData[activePlayer] ||
-        Object.keys(playerLootData[activePlayer]).length === 0
-      ) {
-        alert("No loot data available for the active player to export.");
-        return;
-      }
-      try {
-        const dataToExport = playerLootData[activePlayer];
-        const csvContent = Object.entries(dataToExport)
-          .map(([hrid, count]) => {
-            let itemName = hrid.replace("/items/", "").replace(/_/g, " ");
-            itemName = `"${itemName.replace(/"/g, '""')}"`;
-            return `${itemName},${count}`;
-          })
-          .join("\n");
-        const csvOutput = "Item Name,Count\n" + csvContent;
-        navigator.clipboard
-          .writeText(csvOutput)
-          .then(() => {
-            const originalText = exportBtn.textContent;
-            exportBtn.textContent = "Copied!";
-            exportBtn.style.color = "#4caf50";
-            setTimeout(() => {
-              exportBtn.textContent = originalText;
-              exportBtn.style.color = "";
-            }, 1500);
-          })
-          .catch((err) => {
-            console.error(
-              "[LootTracker] Failed to copy CSV to clipboard:",
-              err
-            );
-            alert("Failed to copy CSV. See console.");
-          });
-      } catch (error) {
-        console.error("[LootTracker] Error generating CSV:", error);
-        alert("Error generating CSV data.");
-      }
-    };
-    document.getElementById("lootClearBtn").onclick = () => {
-      if (
-        confirm(
-          "Are you sure you want to clear ALL tracked loot data? This cannot be undone."
-        )
-      ) {
-        clearAllLootData();
-      }
-    };
-
-    let dragging = false;
-    let offsetX = 0;
-    let offsetY = 0;
-    function beginDrag(e) {
-      if (e.target.closest("button")) return;
-      dragging = true;
-      panel.style.transition = "none";
-      offsetX = e.clientX - panel.offsetLeft;
-      offsetY = e.clientY - panel.offsetTop;
-      document.body.style.userSelect = "none";
-      document.body.style.cursor = "move";
-    }
-    document
-      .getElementById("lootHeader")
-      .addEventListener("mousedown", beginDrag);
-    document
-      .getElementById("lootBottomDragger")
-      .addEventListener("mousedown", beginDrag);
-    document.addEventListener("mousemove", (e) => {
-      if (!dragging) return;
-      const newX = Math.max(
-        0,
-        Math.min(window.innerWidth - panel.offsetWidth, e.clientX - offsetX)
-      );
-      const newY = Math.max(
-        0,
-        Math.min(window.innerHeight - panel.offsetHeight, e.clientY - offsetY)
-      );
-      panel.style.left = `${newX}px`;
-      panel.style.top = `${newY}px`;
-    });
-    document.addEventListener("mouseup", () => {
-      if (!dragging) return;
-      dragging = false;
-      panel.style.transition = "";
-      document.body.style.userSelect = "";
-      document.body.style.cursor = "";
-      localStorage.setItem("lootOverlayTop", panel.style.top);
-      localStorage.setItem("lootOverlayLeft", panel.style.left);
-    });
-
-    // 添加键盘事件监听
-    document.addEventListener("keydown", handleKeyPress);
-
-    console.log("[LootTracker] Overlay created.");
-  }
-
-  // 新增键盘处理函数
-  function handleKeyPress(e) {
-    // 检查是否按的反引号键 (兼容不同浏览器)
-    if (e.key === "`" || e.key === "Backquote") {
-      e.preventDefault();
-      toggleMinimize();
-    }
-  }
-
-  // 封装最小化切换逻辑
-  function toggleMinimize() {
-    if (!document.getElementById("lootOverlay")) return;
-
-    isMinimized = !isMinimized;
-    const content = document.getElementById("lootContent");
-    const minBtn = document.getElementById("lootMinBtn");
-
-    // 执行原有切换逻辑
-    content.style.maxHeight = isMinimized ? "0" : "1000px";
-    content.style.opacity = isMinimized ? "0" : "1";
-    minBtn.textContent = isMinimized ? "+" : "−";
-    localStorage.setItem("lootOverlayMinimized", isMinimized);
-  }
-
-  // 翻译函数优化
-  function translateItemHrid(itemHrid) {
-    // 直接匹配完整hrid路径
-    const chinese = itemNames[itemHrid];
-    // 处理特殊情况：带复数形式的物品
-    const baseHrid = itemHrid.replace(/s$/, '');
-    const baseChinese = itemNames[baseHrid];
-    // 组合最终显示名称
-    return chinese ||
-           (baseChinese ? `${baseChinese}(复数)` :
-           itemHrid.split('/').pop().replace(/_/g, ' '));
-  }
-
-  // 在排序前添加物品价值获取逻辑
-  function getItemValue(itemHrid, count, marketDataAvailable) {
-    let itemValue = 0
-    // 处理金币特殊类型
-    if (itemHrid === '/items/coin'){
-      itemValue = count;
-    } else if (marketDataAvailable) {
-      const nameRaw = itemHrid.replace("/items/", "").replace(/_/g, " ");
-      const marketKey = nameRaw.split(" ").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
-      if (marketData.market[marketKey]?.ask) {
-          itemValue = marketData.market[marketKey].ask;
-      }
-    }
-    return itemValue;
-}
-
-  function updateLootDisplay(playerName) {
-    document.querySelectorAll(`.persistent-gain[data-player="${playerName}"]`).forEach(el => el.remove());
-
-    const container = document.getElementById("lootTotals");
-    const revenueLine = document.getElementById("lootRevenueLine");
-
-    if (!container) {
-      console.error(
-        "[LootTracker] updateLootDisplay: Could not find #lootTotals element!"
-      );
-      if (revenueLine) revenueLine.textContent = "Total Value: Error (UI)";
-      return;
-    }
-    if (!revenueLine) {
-      console.warn(
-        "[LootTracker] updateLootDisplay: Could not find #lootRevenueLine element."
-      );
-    }
-    if (!playerLootData[playerName]) {
-      container.innerHTML = "<i>Waiting for player data...</i>";
-      if (revenueLine) revenueLine.textContent = "Total Value: N/A";
-      return;
-    }
-    if (!previousLootCounts[playerName]) previousLootCounts[playerName] = {};
-
-    const currentLoot = playerLootData[playerName];
-
-    //const sorted = Object.entries(currentLoot).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-    const sorted = Object.entries(currentLoot).sort((a, b) => {a[0].localeCompare(b[0]);});
-    //const sorted = Object.entries(currentLoot).map(([hrid, count]) => ({hrid, count, value: getItemValue(hrid, count, marketDataAvailable)})).sort((a, b) => b.value - a.value || a.hrid.localeCompare(b.hrid));
-
-    let html = "";
-    let totalRevenue = 0;
-    let marketDataAvailable =
-      marketData &&
-      marketData.market &&
-      Object.keys(marketData.market).length > 0;
-
-    // 遍历所有玩家
-    Object.keys(playerLootData).forEach(playerName => {
-      let totalRevenueEach = 0;
-      const playerData = playerLootData[playerName];
-      //const sorted = Object.entries(playerData).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-      //const sorted = Object.entries(playerData).sort((a, b) => {a[0].localeCompare(b[0]);});
-      const sorted = Object.entries(playerData).sort((a, b) => getItemValue(b[0], b[1], marketDataAvailable) - getItemValue(a[0], a[1], marketDataAvailable) || a[0].localeCompare(b[0]));
-
-      // 开始玩家列
-      html += `<div class="player-column">`;
-      html += `<div class="player-header">${playerName}</div>`;
-      html += `<div class="item-list">`;
-
-      if (sorted.length === 0) {
-          html += '<div class="no-loot">No loot tracked yet.</div>';
-          totalRevenueEach = 0;
-      } else {
-          sorted.forEach(([itemHrid, count]) => {
-              const prevDisplayCount = previousLootCounts[playerName][itemHrid] || 0;
-              const lastBattleStartCount = lastBattleLoot[playerName] && lastBattleLoot[playerName][itemHrid] ? lastBattleLoot[playerName][itemHrid] : prevDisplayCount;
-              const gain = count - lastBattleStartCount;
-              const flash = count > prevDisplayCount;
-              const nameRaw = itemHrid.replace("/items/", "").replace(/_/g, " ");
-              const name = translateItemHrid(itemHrid);
-              const gainHTML = gain > 0 ? `<span class="persistent-gain" data-item="${itemHrid}" data-player="${playerName}">+${gain}</span>` : "";
-
-              let itemValue = 0;
-              let priceFound = false;
-              if (itemHrid.endsWith("/coin")) {
-                  itemValue = count;
-                  priceFound = true;
-              } else if (marketDataAvailable) {
-                  const marketKey = nameRaw
-                  .split(" ")
-                  .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-                  .join(" ");
-                  if (marketData.market[marketKey]?.ask) {
-                      itemValue = count * marketData.market[marketKey].ask;
-                      priceFound = true;
-                  }
-              }
-              totalRevenueEach += itemValue;
-
-              html += `
-                <div class="item-row">
-                  <svg class="item-icon">
-                    <svg width="16px" height="16px">
-                    <use href="/static/media/items_sprite.6d12eb9d.svg#${itemHrid.replace("/items/", "")}"></use>
-                  </svg>
-                  <span class="item-name">${name}</span>
-                  <span class="item-count">× ${count}${gainHTML}</span>
-                </div>`;
-
-              previousLootCounts[playerName][itemHrid] = count;
-          });
-      }
-
-      const hasNonCoinItems = sorted.some(([hrid]) => !hrid.endsWith("/coin"));
-      let finalRevenueText = "";
-      if (!marketDataAvailable && hasNonCoinItems && sorted.length > 0) {
-         finalRevenueText = `总价值: 计算中...`;
-      } else if (sorted.length === 0) {
-        finalRevenueText = `总价值: ${formatGold(0)}`;
-      } else {
-        finalRevenueText = `总价值: ${formatGold(totalRevenueEach)}`;
-      }
-
-      html += `
-         <div class="total-line">
-           ${finalRevenueText}
-           ${!hasNonCoinItems ? '' : '<span class="market-note">(市场价)</span>'}
-         </div>`;
-
-      html += `</div></div>`; // 关闭item-list和player-column
-    });
-
-    // 更新容器
-    container.innerHTML = html;
-    if (
-      lastBattleLoot[playerName] &&
-      Object.keys(lastBattleLoot[playerName]).length > 0
-    ) {
-      lastBattleLoot[playerName] = {};
-    }
-  }
-
-  function switchTab(playerName) {
-    activePlayer = playerName;
-
-    document.querySelectorAll("#lootTabs button").forEach((btn) => {
-      btn.classList.toggle("active", btn.dataset.name === playerName);
-    });
-    updateLootDisplay(playerName);
-  }
-
-  function addTab(player) {
-    const playerName = player.name;
-    const lootMap = player.totalLootMap || {};
-    const container = document.getElementById("lootTabs");
-    if (!container) {
-      console.error("[LootTracker] Loot tabs container not found!");
-      return;
-    }
-    if (!playerLootData[playerName]) playerLootData[playerName] = {};
-    if (!previousLootCounts[playerName]) previousLootCounts[playerName] = {};
-    if (!lastBattleLoot[playerName]) lastBattleLoot[playerName] = {};
-
-    let tabNeedsUpdate = false;
-    for (const key in lootMap) {
-      const { itemHrid, count } = lootMap[key];
-      if (playerLootData[playerName][itemHrid] !== count) {
-        lastBattleLoot[playerName][itemHrid] =
-          playerLootData[playerName][itemHrid] || 0;
-        playerLootData[playerName][itemHrid] = count;
-        tabNeedsUpdate = true;
-      }
-    }
-
-    let tabButton = container.querySelector(
-      `button[data-name="${playerName}"]`
-    );
-    if (!tabButton) {
-      tabButton = document.createElement("button");
-      tabButton.textContent = playerName;
-      tabButton.dataset.name = playerName;
-      tabButton.onclick = () => switchTab(playerName);
-      container.appendChild(tabButton);
-
-      if (!activePlayer) activePlayer = playerName;
-    }
-
-    if (playerName === myPlayerName && !selfTabSelected) {
-      selfTabSelected = true;
-      switchTab(playerName);
-      tabNeedsUpdate = false;
-    } else if (playerName === activePlayer && tabNeedsUpdate) {
-      updateLootDisplay(playerName);
-    }
-    if (playerName === activePlayer) {
-      document.querySelectorAll("#lootTabs button").forEach((btn) => {
-        btn.classList.toggle("active", btn.dataset.name === activePlayer);
-      });
-    }
-  }
-
-  function clearAllLootData() {
-    console.log("[LootTracker] Clearing all loot data.");
-
-    for (const p in playerLootData) {
-      playerLootData[p] = {};
-      previousLootCounts[p] = {};
-      lastBattleLoot[p] = {};
-    }
-
-    const tabsContainer = document.getElementById("lootTabs");
-    const totalsContainer = document.getElementById("lootTotals");
-    const revenueLine = document.getElementById("lootRevenueLine");
-
-    if (tabsContainer) tabsContainer.innerHTML = "";
-    if (totalsContainer) totalsContainer.innerHTML = "<i>Loot data cleared.</i>";
-    if (revenueLine) revenueLine.textContent = "Total Value: N/A";
-
-    activePlayer = null;
-    selfTabSelected = false;
-
-    document.removeEventListener("keydown", handleKeyPress);
-  }
-
-  // 在卸载脚本时移除监听
-  window.addEventListener("beforeunload", () => {
-    document.removeEventListener("keydown", handleKeyPress);
-  });
-
-  (function injectWebSocketInterceptor() {
-    const scriptId = "milkyway-websocket-interceptor";
-
-    if (document.getElementById(scriptId)) return;
-
-    const s = document.createElement("script");
-    s.id = scriptId;
-    s.textContent = `
-          (function() {
-
-            if (window.originalWebSocket) { return; }
-            window.originalWebSocket = window.WebSocket;
-
-
-            window.WebSocket = new Proxy(window.originalWebSocket, {
-              construct(target, args) {
-
-                const wsInstance = new target(...args);
-                try {
-                    const url = args[0];
-
-                    if (typeof url === 'string' && (url.includes("api.milkywayidle.com/ws") || url.includes("api-test.milkywayidle.com/ws"))) {
-
-
-                        wsInstance.addEventListener("message", (event) => {
-                          try {
-                            const data = JSON.parse(event.data);
-
-                            if (data.type === "new_battle" && data.players) {
-
-                              window.dispatchEvent(new CustomEvent("LootTrackerBattle", { detail: data }));
-                            }
-
-                            else if ( data.type === "new_character_action" && data.newCharacterActionData?.shouldClearQueue && data.newCharacterActionData.actionHrid?.startsWith("/actions/combat/") ) {
-
-                              window.dispatchEvent(new CustomEvent("LootTrackerCombatReset"));
-                            }
-                          } catch (parseOrDispatchError) {
-                              console.error('[LootTracker WS Interceptor] Error processing message:', parseOrDispatchError, 'Raw Data:', event.data);
-                          }
-                        });
-
-
-                        wsInstance.addEventListener("open", () => {
-
-                        });
-
-
-                        wsInstance.addEventListener("close", (event) => {
-
-                            console.log(\`[LootTracker WS Interceptor] Target WebSocket connection closed. Code: \${event.code}, Reason: \${event.reason}. Dispatching LootTrackerWSClosed event.\`);
-
-                            window.dispatchEvent(new CustomEvent("LootTrackerWSClosed", {
-                                detail: { code: event.code, reason: event.reason }
-                            }));
-                        });
-
-
-                        wsInstance.addEventListener("error", (event) => {
-                            console.error('[LootTracker WS Interceptor] Target WebSocket error:', event);
-                        });
-
-                    }
-                } catch (proxyConstructError) {
-                    console.error('[LootTracker WS Interceptor] Error setting up WebSocket proxy:', proxyConstructError);
-                }
-
-                return wsInstance;
-              }
-            });
-
-            console.log('[LootTracker WS Interceptor] WebSocket Proxy installed.');
-          })();
-        `;
-
-    (document.head || document.documentElement).appendChild(s);
-  })();
-
-  window.addEventListener("LootTrackerBattle", (e) => {
-    if (!overlayReady) {
-      console.warn(
-        "[LootTracker] Overlay not ready when battle event received, skipping update."
-      );
-      return;
-    }
-    const data = e.detail;
-
-    if (data && data.players && Array.isArray(data.players)) {
-      data.players.forEach((player) => {
-        if (player && player.name) {
-          addTab(player);
-        } else {
-          console.warn(
-            "[LootTracker] Player data missing name in battle event:",
-            player
-          );
-        }
-      });
-    } else {
-      console.warn(
-        "[LootTracker] Invalid data received in LootTrackerBattle event:",
-        data
-      );
-    }
-  });
-
-  window.addEventListener("LootTrackerWSClosed", (e) => {
-    console.log(
-      `[LootTracker] Detected WebSocket closure (Code: ${e.detail?.code}, Reason: ${e.detail?.reason}). Clearing all loot data and resetting player name.`
-    );
-
-    myPlayerName = null;
-
-    activePlayer = null;
-    selfTabSelected = false;
-
-    if (overlayReady) {
-      clearAllLootData();
-    } else {
-      console.warn(
-        "[LootTracker] WebSocket closed, but overlay not ready. Data should be clear on next init."
-      );
-    }
-  });
-
-  window.addEventListener("LootTrackerCombatReset", (e) => {
-    if (!overlayReady) {
-      console.warn(
-        "[LootTracker] Overlay not ready when reset event received, skipping clear."
-      );
-      return;
-    }
-    console.log("[LootTracker] Calling clearAllLootData due to combat reset.");
-    clearAllLootData();
-  });
-
-  function initialize() {
-    console.log("[LootTracker] Initializing...");
-    createOverlay();
-    detectPlayerName();
-  }
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initialize);
-  } else {
-    initialize();
-  }
 })();
