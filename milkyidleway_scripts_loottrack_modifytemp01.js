@@ -1,13 +1,13 @@
 // ==UserScript==
-// @name         Milkyway Idle - Current Loot Tracker
+// @name         Current Loot Tracker Modified v20250531
 // @namespace    https://milkywayidle.com/
 // @version      2.1
 // @description  Tracks loot with overlay, total coin value via ask prices, improved UI/CSS, and fixed display logic.
 // @match        https://www.milkywayidle.com/*
 // @grant        none
 // @license      MIT
-// @downloadURL https://update.greasyfork.cc/scripts/531302/Milkyway%20Idle%20-%20Current%20Loot%20Tracker.user.js
-// @updateURL https://update.greasyfork.cc/scripts/531302/Milkyway%20Idle%20-%20Current%20Loot%20Tracker.meta.js
+// @downloadURL
+// @updateURL
 // ==/UserScript==
 
 //BigKitten改自Current Loot Tracker插件, 做了以下改变:
@@ -21,6 +21,7 @@
 //次要改变:
 //b1.获取物品的+1+2+3+n符号取消闪烁效果, 从蓝色改为绿色;
 //b2.高于100k的物品使用橙色标记
+//b3.截取所有物品名称的头2个汉字, 方便对齐和缩小面板
 //尚未完成
 //c1.获取的每一行物品的价格需要跟在每一行物品数量的后方.
 
@@ -34,19 +35,13 @@
   let activePlayer = null;
   let selfTabSelected = false;
   let isMinimized = localStorage.getItem("lootOverlayMinimized") === "true";
-  let isLootListMinimized =
-    localStorage.getItem("lootListMinimized") === "true";
+  let isLootListMinimized = localStorage.getItem("lootListMinimized") === "true";
   let overlayReady = false;
   let marketData = {};
 
-  //定时器, 定期点击3个角色面板, 刷新所有的+号
-  //let autoSwitchTimeout = null;
-
-  // 在全局作用域添加颜色索引变量
-  let colorIndex = 0; // 新增
-
+  //"https://raw.githubusercontent.com/holychikenz/MWIApi/main/medianmarket.json"
   fetch(
-    "https://raw.githubusercontent.com/holychikenz/MWIApi/main/medianmarket.json"
+    "https://raw.githubusercontent.com/holychikenz/MWIApi/main/milkyapi.json"
   )
     .then((response) => {
       if (!response.ok) {
@@ -102,7 +97,7 @@
 
     panel.innerHTML = `
         <div id="lootHeader">
-          <span id="lootTitle">📦 Current Loot</span>
+          <span id="lootTitle">📦 Current Loot v20250531</span>
           <div id="lootHeaderButtons">
             <button id="lootExportBtn" class="loot-btn" data-tooltip="Export current player's loot as CSV">CSV</button>
             <button id="lootClearBtn" class="loot-btn" data-tooltip="Close Plugin">×</button>
@@ -131,90 +126,76 @@
         #lootOverlay {
           position: fixed;
           width: auto;
-          min-width: 320px; /* 最小宽度保证基本可用性 */
+          min-width: 150px; /* 最小宽度保证基本可用性 */
           max-width: 95vw;  /* 最大不超过视口宽度的95% */
           /* right: 20px;      添加右侧定位 */
           background: rgba(30, 30, 30, 0.95);
           color: #fff;
           font-family: monospace;
           font-size: 13px;
-          border: 1px solid #555;
-          border-radius: 8px;
+          /* border: 1px solid #555; */
+          border: 1px solid rgba(85,85,85,0.5); /* 增加边框透明度 */
+          border-radius: 4px;
           z-index: 99999;
           user-select: none;
           box-shadow: 0 4px 10px rgba(0,0,0,0.4);
         }
-        #lootHeader {
-          display: flex; justify-content: space-between; align-items: center;
-          padding: 6px 10px; background: rgba(20, 20, 20, 0.85);
-          border-bottom: 1px solid #333; border-radius: 8px 8px 0 0; cursor: move;
-        }
+        #lootHeader { display: flex; justify-content: space-between; align-items: center; padding: 1px 1px; background: rgba(20, 20, 20, 0.85); border-bottom: 1px solid #333; border-radius: 8px 8px 0 0; cursor: move; }
         #lootTitle { font-weight: bold; }
         #lootHeaderButtons { display: flex; gap: 4px; }
-        .loot-btn {
-          background: none; border: none; color: #aaa; cursor: pointer;
-          font-size: 14px; padding: 0 3px; position: relative;
-        }
+        .loot-btn {background: none; border: none; color: #aaa; cursor: pointer; font-size: 14px; padding: 0 3px; position: relative; }
         .loot-btn:hover { color: #fff; }
-        .loot-btn:hover::after {
-          content: attr(data-tooltip); position: absolute; left: 50%; top: 110%;
-          transform: translateX(-50%); background: #222; color: #fff; padding: 4px 8px;
-          font-size: 11px; border-radius: 4px; white-space: nowrap; opacity: 0.95;
-          pointer-events: none; z-index: 100000;
-        }
-        #lootContent {
-          overflow: hidden; transition: max-height 0.3s ease-out, opacity 0.3s ease-out;
-          will-change: max-height, opacity;
-        }
-        #lootTabs {
-          display: flex; flex-wrap: wrap; padding: 5px 10px; gap: 6px;
-          border-bottom: 1px solid #333; background: rgba(24, 24, 24, 0.8); min-height: 26px;
-        }
-        #lootTabs button {
-          background: none; border: 1px solid #444; color: #aaa; padding: 2px 6px;
-          font-family: monospace; cursor: pointer; border-radius: 4px; font-size: 12px;
-          transition: background-color 0.2s, color 0.2s, border-color 0.2s;
-        }
+        .loot-btn:hover::after { content: attr(data-tooltip); position: absolute; left: 50%; top: 110%;transform: translateX(-50%); background: #222; color: #fff; padding: 4px 8px;font-size: 11px; border-radius: 4px; white-space: nowrap; opacity: 0.95;pointer-events: none; z-index: 100000; }
+        #lootContent { overflow: hidden; transition: max-height 0.3s ease-out, opacity 0.3s ease-out; will-change: max-height, opacity; padding: 4px 0; }
+        #lootTabs { display: flex; flex-wrap: wrap; padding: 5px 10px; gap: 6px; border-bottom: 1px solid #333; background: rgba(24, 24, 24, 0.8); min-height: 26px; }
+        #lootTabs button { background: none; border: 1px solid #444; color: #aaa; padding: 2px 6px; font-family: monospace; cursor: pointer; border-radius: 4px; font-size: 12px; transition: background-color 0.2s, color 0.2s, border-color 0.2s; }
         #lootTabs button:hover { background-color: #555; color: #fff; }
-        #lootTabs button.active {
-          background: #4caf50; color: #fff; border-color: #4caf50; font-weight: bold;
-        }
-        #lootToggleHeader {
-          padding: 6px 10px; cursor: pointer; font-weight: bold; border-bottom: 1px solid #333;
-          background: rgba(28, 28, 28, 0.8);
-        }
+        #lootTabs button.active { background: #4caf50; color: #fff; border-color: #4caf50; font-weight: bold; }
+        #lootToggleHeader { padding: 0px 0px; cursor: pointer; font-weight: bold; border-bottom: 1px solid #333; background: rgba(28, 28, 28, 0.8); }
         #lootToggleHeader:hover { background: rgba(40, 40, 40, 0.9); }
         #lootToggleIcon { display: inline-block; transition: transform 0.2s ease-out; margin-left: 5px; }
+
+        /* 新增隐藏底部拖拽条 */
         #lootBottomDragger {
-          padding: 6px 10px; cursor: move; border-top: 1px solid #444;
-          background: rgba(20, 20, 20, 0.85); border-radius: 0 0 8px 8px;
+          display: none !important;
+          height: 0 !important;
+          padding: 0 !important;
+          border: none !important;
         }
-        #lootRevenueLine {
-          font-weight: bold; color: gold; cursor: inherit; padding-bottom: 4px;
-          white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        }
+
+        #lootRevenueLine { font-weight: bold; color: gold; cursor: inherit; padding-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .drag-spacer { height: 8px; cursor: inherit; }
         @keyframes lootFlashText { 0% { color: #b6ffb8; transform: scale(1.02); } 100% { color: white; transform: scale(1); } }
+
         .flashLoot { animation: lootFlashText 1s ease-out; }
 
         .fadeGain {
-          color: lime; font-weight: bold; font-size: 10px; vertical-align: super;
-          /* opacity: 1; transition: opacity 2s ease-out; */
-          margin-left: 3px; display: inline-block;
+          color: lime;
+          font-weight: bold;
+          font-size: 10px;
+          vertical-align: super;
+          opacity: 1;
+          transition: opacity 2s ease-out;
+          margin-left: 3px;
+          display: inline-block;
         }
 
         .persistent-gain {
           color: #00ff00;
           font-weight: bold;
           animation: persistentPulse 10s infinite;
+          position: absolute; /* 改为绝对定位 */
+          right: 0;          /* 固定在右侧 */
+          width: 50px;       /* 固定增益数字区域宽度 */
+          text-align: right;  /* 右对齐 */
         }
 
         /* 横向布局容器 */
         #columnsContainer {
           overflow-x: auto;
           overflow-y: auto; /* 纵向滚动 */
-          padding: 0 10px;
-          max-height: 160vh;
+          padding: 0 0px;
+          max-height: 280vh;
           max-width: calc(100vw - 60px); /* 根据视口动态计算 */
         }
 
@@ -222,19 +203,19 @@
           overflow-y: visible; /* 取消纵向滚动 */
           max-height: none !important; /* 移除高度限制 */
           display: flex;
-          gap: 20px;
-          padding: 10px 5px;
+          gap: 2px; /* 控制列间距 */
+          padding: 0px 0px;
           min-width: fit-content; /* 确保宽度足够 */
           flex-wrap: nowrap; /* 禁止换行 */
         }
 
         /* 单个玩家列 */
         .player-column {
-          min-width: 220px;  /* 最小列宽 */
+          min-width: 120px;  /* 最小列宽 */
           flex-shrink: 0;    /* 禁止列压缩 */
           background: rgba(40,40,40,0.3);
           border-radius: 6px;
-          padding: 8px;
+          padding: 4px 6px;
           border: 1px solid #444;
           height: fit-content; /* 高度自适应 */
         }
@@ -242,8 +223,9 @@
         .player-header {
           font-weight: bold;
           color: #4caf50;
-          margin-bottom: 8px;
-          padding: 4px;
+          font-size: 11px;
+          padding: 2px 6px;
+          margin-bottom: 4px;
           text-align: center;
           position: sticky;
           left: 0;
@@ -256,18 +238,17 @@
           gap: 4px;
         }
 
-        /* 响应式调整 */
         @media (max-width: 600px) {
           .player-column {
             min-width: 180px;
           }
         }
 
-        /* 新增玩家区块样式 */
+        /* 玩家区块样式 */
         .player-section {
           margin-bottom: 15px;
           border-bottom: 1px solid #444;
-          padding-bottom: 10px;
+          padding-bottom: 2px;
           background: rgba(40, 40, 40, 0.2);
           border-radius: 4px;
           padding: 8px;
@@ -295,22 +276,13 @@
           overflow-y: auto;
         }
 
-        .item-name {
-          color: #eee;
-        }
-
-        .item-count {
-          color: #4caf50;
-          float: right;
-      }
-
         /* 物品行细节 */
         .item-row {
           display: flex;
           justify-content: space-between;
-          padding: 4px 8px;
+          padding: 2px 0px;
           background: rgba(50, 50, 50, 0.3);
-          border-radius: 4px;
+          border-radius: 0px;
           transition: background 0.2s;
         }
 
@@ -323,19 +295,32 @@
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
+          text-align: left; /* 对齐 */
+          flex-grow: 1; /* 确保名称区域扩展 */
         }
 
-        /* 调整图标尺寸 */
+        /* 图标尺寸 */
         .item-icon {
           width: 24px;
           height: 24px;
-          margin-right: 1px; /* 适当调整图标与文字的间距 */
+          margin-right: 1px; /* 图标与文字的间距 */
         }
 
         .item-count {
-          /* color: #4caf50; */
           color: #2196F3; /* 使用Material Design蓝色 */
-          margin-left: 8px;
+          margin-left: 6px; /* 缩小间距 */
+          flex-shrink: 0; /* 防止被压缩 */
+          min-width: 70px;  /* 新增：固定计数区域宽度 */
+          text-align: right;  /* 新增：右对齐保持布局稳定 */
+          position: relative; /* 新增：为增益数字定位做准备 */
+        }
+
+        /* 新增：始终保留空间的占位符 */
+        .item-count::after {
+          content: "+00000"; /* 创建透明占位符 */
+          visibility: hidden;
+          display: inline-block;
+          width: 50px;       /* 与persistent-gain同宽 */
         }
 
         .total-line {
@@ -343,13 +328,13 @@
            font-weight: bold;    /* 粗体 */
            color: #FFD700;       /* 黄色十六进制代码 */
            /* 或者使用颜色名称：color: gold; */
-         padding: 4px 0;
+         padding: 0px 0;
          }
 
         .no-loot {
           color: #666;
           text-align: center;
-          padding: 8px;
+          padding: 0px;
       }
       `;
     // 在样式标签添加标识（在创建style元素后添加）
@@ -500,27 +485,53 @@
   // 新增键盘处理函数
   function handleKeyPress(e) {
     // 检查是否按的反引号键 (兼容不同浏览器)
-    if (e.key === "`" || e.key === "Backquote") {
+    if ((e.key === "`" || e.code === "Backquote") && !e.shiftKey) {
       e.preventDefault();
       toggleMinimize();
     }
 
-      // 新增反斜杠键处理（\键）
-      if (e.key === '\\') {
-          e.preventDefault();
-          triggerTabSwitch();
+    // 新增反斜杠键处理（\键）
+    // 处理反斜杠键（兼容不同键盘布局）
+    const isBackslash =
+      e.key === "\\" ||
+      e.code === "Backslash" ||
+      (e.key === "|" && e.shiftKey); // 某些布局下需Shift+反斜杠
+
+    if ((e.key === '\\' || e.code === "Backslash") && !e.shiftKey) {
+      e.preventDefault();
+      // 如果面板处于折叠状态，先展开
+      if (isMinimized) {
+          toggleMinimize(); // 展开面板
       }
+      triggerTabSwitch();
+    }
   }
 
     // 触发函数
     function triggerTabSwitch() {
-        colorIndex = (colorIndex + 1) % 3; // 颜色索引循环
-        const tabs = document.querySelectorAll('#lootTabs button');
-        if (tabs.length >= 3) {
-            tabs[0].click();
-            setTimeout(() => tabs[1].click(), 100);
-            setTimeout(() => tabs[2].click(), 200);
-        }
+      const tabs = document.querySelectorAll('#lootTabs button');
+      tabs[0].click();
+      if (tabs.length === 6) {
+        setTimeout(() => tabs[1].click(), 100);
+        setTimeout(() => tabs[2].click(), 200);
+        setTimeout(() => tabs[3].click(), 300);
+        setTimeout(() => tabs[4].click(), 400);
+        setTimeout(() => tabs[5].click(), 500);
+      }else if (tabs.length === 5) {
+        setTimeout(() => tabs[1].click(), 100);
+        setTimeout(() => tabs[2].click(), 200);
+        setTimeout(() => tabs[3].click(), 300);
+        setTimeout(() => tabs[4].click(), 400);
+      }else if (tabs.length === 4) {
+        setTimeout(() => tabs[1].click(), 100);
+        setTimeout(() => tabs[2].click(), 200);
+        setTimeout(() => tabs[3].click(), 300);
+      }else if (tabs.length === 3) {
+        setTimeout(() => tabs[1].click(), 100);
+        setTimeout(() => tabs[2].click(), 200);
+      }else if (tabs.length === 2) {
+        setTimeout(() => tabs[1].click(), 100);
+      }
     }
 
   // 封装最小化切换逻辑
@@ -569,8 +580,6 @@
 
   function updateLootDisplay(playerName) {
     document.querySelectorAll(`.persistent-gain[data-player="${playerName}"]`).forEach(el => el.remove());
-
-    const colors = ['#00ff00', '#ffff00', '#ff0000']; // 绿/黄/红
     const container = document.getElementById("lootTotals");
     const revenueLine = document.getElementById("lootRevenueLine");
 
@@ -594,10 +603,7 @@
     if (!previousLootCounts[playerName]) previousLootCounts[playerName] = {};
 
     const currentLoot = playerLootData[playerName];
-
-    //const sorted = Object.entries(currentLoot).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
     const sorted = Object.entries(currentLoot).sort((a, b) => {a[0].localeCompare(b[0]);});
-    //const sorted = Object.entries(currentLoot).map(([hrid, count]) => ({hrid, count, value: getItemValue(hrid, count, marketDataAvailable)})).sort((a, b) => b.value - a.value || a.hrid.localeCompare(b.hrid));
 
     let html = "";
     let totalRevenue = 0;
@@ -610,9 +616,6 @@
     Object.keys(playerLootData).forEach(playerName => {
       let totalRevenueEach = 0;
       const playerData = playerLootData[playerName];
-      // const sorted = Object.entries(playerData).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-      // const sorted = Object.entries(playerData).sort((a, b) => {a[0].localeCompare(b[0]);});
-      // const sorted = Object.entries(playerData).sort((a, b) => getItemValue(b[0], b[1], marketDataAvailable) - getItemValue(a[0], a[1], marketDataAvailable) || a[0].localeCompare(b[0]));
       const sorted = Object.entries(playerData).sort((a, b) => {
           // 强制金币排在第一位
           const aIsCoin = a[0] === '/items/coin';
@@ -639,10 +642,13 @@
               const flash = count > prevDisplayCount;
               const nameRaw = itemHrid.replace("/items/", "").replace(/_/g, " ");
               const name = translateItemHrid(itemHrid);
-              const gainHTML = gain > 0 ? `<span class="persistent-gain" data-item="${itemHrid}" data-player="${playerName}">+${gain}</span>` : "";
 
-              //const currentColor = colors[colorIndex % 3];
-              //const gainHTML = gain > 0 ? `<span class="persistent-gain" style="color: ${currentColor}" data-item="${itemHrid}" data-player="${playerName}">+${gain}</span>` : "";
+              //+号在数量右侧
+              let gainHTML = gain > 0 ? `<span class="persistent-gain" data-item="${itemHrid}" data-player="${playerName}">+${gain}</span>` : "";
+
+              //+号在数量右上角, 小字
+              //let gainHTML = gain > 0 ? `<span class="persistent-gain" data-item="${itemHrid}" data-player="${playerName}"></span>` : "";
+              //gainHTML += gain > 0 ? `<span class="fadeGain">+${gain}</span>` : "";
 
               let itemValue = 0;
               let priceFound = false;
@@ -666,45 +672,41 @@
               totalRevenueEach += itemValue;
 
               //价值判断决定颜色
-              const nameColor = isHighValue ? "#FFA500" : "#ddd"; //颜色切换
-              //"red"       // 红色 (#FF0000)
-              //"blue"      // 蓝色 (#0000FF)
-              //"green"     // 绿色 (#008000)
-              //"orange"    // 橙色 (#FFA500)
-              //"purple"    // 标准紫色 (#800080)
-              //"cyan"      // 青色 (#00FFFF)
-              //"teal"      // 蓝绿色 (#008080)
-              //"gold"      // 金色 (#FFD700)
+              const nameColor = isHighValue ? "#FFA500" : "#ddd"; //颜色切换 红色(#FF0000),蓝色(#0000FF),绿色(#008000),橙色(#FFA500),标准紫色(#800080),青色(#00FFFF),蓝绿色(#008080),金色(#FFD700)
+
+              // 截取中文名前3个字符
+              const displayName = name.length > 2 ? name.substring(0, 2) : name;
 
               if (itemHrid.endsWith("/coin")) {
+                  // 如果希望增加的金币不是+9000, 而是+9k的话, 在这里修改
+                  gainHTML = gain > 0 ? `<span class="persistent-gain" data-item="${itemHrid}" data-player="${playerName}">+${gain}</span>` : "";
                   html += `
                     <div class="item-row">
                       <svg class="item-icon">
-                        <svg width="15px" height="15px">
+                        <svg width="18px" height="18px">
                         <use href="/static/media/items_sprite.6d12eb9d.svg#${itemHrid.replace("/items/", "")}"></use>
                       </svg>
-                      <span class="item-name" style="color: ${nameColor}">${name}</span></span>
-                      <span class="item-count">× ${count}${gainHTML}</span>
+                      <span class="item-name" style="color: ${nameColor}">${displayName}</span>
+                      <span class="item-count">× ${Math.floor(count / 1000)}k ${gainHTML}</span>
                     </div>`;
               }else if (singleItemValue >= 100000){
                   html += `
                     <div class="item-row">
                       <svg class="item-icon">
-                        <svg width="15px" height="15px">
+                        <svg width="18px" height="18px">
                         <use href="/static/media/items_sprite.6d12eb9d.svg#${itemHrid.replace("/items/", "")}"></use>
                       </svg>
-                      <span class="item-name" style="color: ${nameColor}">${name} (${Math.floor(itemValue / 1000)}k)</span></span>
-                      <span class="item-count">× ${count}${gainHTML}</span>
+                      <span class="item-name" style="color: ${nameColor}">${displayName}(${Math.floor(itemValue / 1000)}k)</span>
+                      <span class="item-count" style="color: ${nameColor}">× ${count}${gainHTML}</span>
                     </div>`;
-
               }else {
                   html += `
                     <div class="item-row">
                       <svg class="item-icon">
-                        <svg width="15px" height="15px">
+                        <svg width="18px" height="18px">
                         <use href="/static/media/items_sprite.6d12eb9d.svg#${itemHrid.replace("/items/", "")}"></use>
                       </svg>
-                      <span class="item-name" style="color: ${nameColor}">${name}</span></span>
+                      <span class="item-name" style="color: ${nameColor}">${displayName}</span>
                       <span class="item-count">× ${count}${gainHTML}</span>
                     </div>`;
               }
@@ -730,15 +732,14 @@
       if (!marketDataAvailable && hasNonCoinItems && sorted.length > 0) {
          finalRevenueText = `未取到Github市价数据`;
       } else if (sorted.length === 0) {
-        finalRevenueText = `总价值: ${formatGold(0)}`;
+        finalRevenueText = `Total: ${formatGold(0)}`;
       } else {
-        finalRevenueText = `总价值: ${formatGold(totalRevenueEach)}`;
+        finalRevenueText = `Total: ${Math.floor(totalRevenueEach / 1000)}k`; //formatGold(totalRevenueEach)
       }
 
       html += `
          <div class="total-line">
            ${finalRevenueText}
-           ${!hasNonCoinItems ? '' : '<span class="market-note">(市场价)</span>'}
          </div>`;
 
       html += `</div></div>`; // 关闭item-list和player-column
@@ -986,7 +987,7 @@
     initialize();
   }
 
-  // 中英物品名称对照字典（示例部分）
+  // 中英物品名称对照字典
   const itemNames = {
   "/items/coin": "\u91d1\u5e01",
   "/items/task_token": "\u4efb\u52a1\u4ee3\u5e01",
